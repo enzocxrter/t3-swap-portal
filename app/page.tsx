@@ -16,6 +16,12 @@ const POH_API_BASE = "https://poh-api.linea.build/poh/v2";
 const POH_VERIFY_URL =
   "https://linea.build/hub/apps/sumsub-reusable-identity";
 
+// Marketplace URLs
+const TICKETS_MARKET_URL =
+  "https://element.market/collections/t-baggiez-tickets?search[toggles][0]=ALL";
+const TBAGGIEZ_MARKET_URL =
+  "https://element.market/collections/t-baggiez?search[toggles][0]=ALL";
+
 // ====== ABIs ======
 const SWAP_CONTRACT_ABI = [
   "function swapTicketsForTBaggiez(uint256[4] ids) external",
@@ -83,6 +89,10 @@ export default function Page() {
     [],
     [],
   ]);
+
+  // has the user scanned per portal at least once?
+  const [hasScannedTickets, setHasScannedTickets] = useState(false);
+  const [hasScannedTBaggiez, setHasScannedTBaggiez] = useState(false);
 
   const [isLoading, setIsLoading] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
@@ -188,6 +198,8 @@ export default function Page() {
     setHoveredChip(null);
     setIsPohVerified(null);
     setIsPohLoading(false);
+    setHasScannedTickets(false);
+    setHasScannedTBaggiez(false);
     setErrorMessage(null);
     setSuccessMessage(null);
   };
@@ -441,6 +453,7 @@ export default function Page() {
         }
 
         setTicketSlotOptions(newOptions);
+        setHasScannedTickets(true);
       } else {
         const newOptions: number[][] = [[], [], []];
 
@@ -470,6 +483,7 @@ export default function Page() {
         }
 
         setTbagSlotOptions(newOptions);
+        setHasScannedTBaggiez(true);
       }
     } catch (err) {
       console.error("Scan error:", err);
@@ -596,17 +610,83 @@ export default function Page() {
     }
   };
 
-  // Primary button click handler:
-  // - Not connected → connect wallet
-  // - Not POH verified → open POH page
-  // - Verified → perform swap
+  // ============================================================
+  // PRIMARY BUTTON BEHAVIOUR (connect / POH / marketplace / swap)
+  // ============================================================
+
+  // Derived "missing slot" state, only after scan
+  const hasMissingTickets =
+    hasScannedTickets && ticketSlotOptions.some((slot) => slot.length === 0);
+  const hasMissingTBaggiez =
+    hasScannedTBaggiez && tbagSlotOptions.some((slot) => slot.length === 0);
+
+  const hasMissingForActivePortal =
+    activePortal === "tickets" ? hasMissingTickets : hasMissingTBaggiez;
+
+  const marketplaceUrl =
+    activePortal === "tickets" ? TICKETS_MARKET_URL : TBAGGIEZ_MARKET_URL;
+
+  const buttonLabel = (() => {
+    if (!walletAddress) return "Connect Wallet";
+    if (isSwapping) return "Swapping...";
+
+    // If user has scanned and is missing at least one slot → marketplace CTA
+    if (hasMissingForActivePortal) {
+      return activePortal === "tickets"
+        ? "Find your missing Tickets token IDs here"
+        : "Find your missing T-Baggiez token IDs here";
+    }
+
+    // If POH is not verified yet → send to POH
+    if (!isPohLoading && isPohVerified !== true) {
+      return "Click here to verify POH";
+    }
+
+    // Normal swap labels
+    return activePortal === "tickets"
+      ? "Swap Tickets → T-Baggiez"
+      : "Swap T-Baggiez → SE T-Baggiez";
+  })();
+
+  const rewardsLabel =
+    activePortal === "tickets"
+      ? "Remaining T-Baggiez"
+      : "Remaining SE T-Baggiez";
+  const rewardsValue =
+    activePortal === "tickets" ? remainingTicketsRewards : remainingSeRewards;
+
+  // Disable primary button when it literally can't do anything useful:
+  const isPrimaryDisabled = (() => {
+    if (isSwapping) return true;
+
+    // If missing IDs after scan, button always clickable → opens marketplace
+    if (hasMissingForActivePortal) return false;
+
+    if (!walletAddress) return false; // can always click to connect
+    if (isPohLoading) return true; // wait for POH check to finish
+    // If not POH-verified, button opens verification page → should be clickable
+    if (isPohVerified !== true) return false;
+    // POH OK: enforce network + approval for swaps
+    if (!isOnLinea || !currentHasApproval) return true;
+    return false;
+  })();
+
   const handlePrimaryClick = () => {
+    // 1) Not connected → connect
     if (!walletAddress) {
       connectWallet();
       return;
     }
 
-    // If POH status is known and NOT verified, or unknown (null), send to POH flow
+    // 2) If missing IDs after a scan → send to marketplace
+    if (hasMissingForActivePortal) {
+      if (typeof window !== "undefined") {
+        window.open(marketplaceUrl, "_blank");
+      }
+      return;
+    }
+
+    // 3) If POH status is known and NOT verified, or unknown (null), send to POH flow
     if (!isPohLoading && isPohVerified !== true) {
       if (typeof window !== "undefined") {
         window.open(POH_VERIFY_URL, "_blank");
@@ -614,7 +694,7 @@ export default function Page() {
       return;
     }
 
-    // Otherwise, attempt swap
+    // 4) Otherwise, attempt swap
     handleSwap();
   };
 
@@ -637,6 +717,8 @@ export default function Page() {
         setHoveredChip(null);
         setIsPohVerified(null);
         setIsPohLoading(false);
+        setHasScannedTickets(false);
+        setHasScannedTBaggiez(false);
       } else {
         const acc = accounts[0];
         setWalletAddress(acc);
@@ -688,36 +770,6 @@ export default function Page() {
   // ============================================================
   // RENDER HELPERS
   // ============================================================
-
-  const buttonLabel = (() => {
-    if (!walletAddress) return "Connect Wallet";
-    if (isSwapping) return "Swapping...";
-    if (!isPohLoading && isPohVerified !== true) {
-      return "Click here to verify POH";
-    }
-    return activePortal === "tickets"
-      ? "Swap Tickets → T-Baggiez"
-      : "Swap T-Baggiez → SE T-Baggiez";
-  })();
-
-  const rewardsLabel =
-    activePortal === "tickets"
-      ? "Remaining T-Baggiez"
-      : "Remaining SE T-Baggiez";
-  const rewardsValue =
-    activePortal === "tickets" ? remainingTicketsRewards : remainingSeRewards;
-
-  // Disable primary button when it literally can't do anything useful:
-  const isPrimaryDisabled = (() => {
-    if (isSwapping) return true;
-    if (!walletAddress) return false; // can always click to connect
-    if (isPohLoading) return true; // wait for POH check to finish
-    // If not POH-verified, button opens verification page → should be clickable
-    if (isPohVerified !== true) return false;
-    // POH OK: enforce network + approval for swaps
-    if (!isOnLinea || !currentHasApproval) return true;
-    return false;
-  })();
 
   const tokenChips = (
     slotIndex: number,
@@ -838,7 +890,7 @@ export default function Page() {
         <div className="mint-card">
           <div className="mint-card-header">
             <h1>T3 Swap Portal</h1>
-            <p>Swap your tickets &amp; T-Baggiez to upgrade!</p>
+            <p>Swap your tickets & T-Baggiez to upgrade!</p>
           </div>
 
           <div className="status-row">
@@ -1380,10 +1432,9 @@ export default function Page() {
           opacity: 0.26;
           pointer-events: none;
           z-index: 0;
-          animation-duration: 14s;
+          animation-duration: 12s;
           animation-iteration-count: infinite;
           animation-timing-function: ease-in-out;
-          animation-direction: alternate;
         }
 
         .bg-img img {
@@ -1424,45 +1475,51 @@ export default function Page() {
           }
         }
 
-        /* Make 0% and 100% match so there's no snap on loop,
-           then put the big motion at 50% */
         @keyframes float1 {
-          0%,
-          100% {
+          0% {
             transform: translate(0px, 0px) rotate(-2deg) scale(1);
           }
           50% {
-            transform: translate(10px, -6px) rotate(-4deg) scale(1.12);
+            transform: translate(10px, -6px) rotate(-4deg) scale(1.25);
+          }
+          100% {
+            transform: translate(-4px, 4px) rotate(-3deg) scale(1.12);
           }
         }
 
         @keyframes float2 {
-          0%,
-          100% {
+          0% {
             transform: translate(0px, 0px) rotate(2deg) scale(1.05);
           }
           50% {
-            transform: translate(-12px, -10px) rotate(4deg) scale(1.2);
+            transform: translate(-12px, -10px) rotate(4deg) scale(1.25);
+          }
+          100% {
+            transform: translate(8px, 6px) rotate(3deg) scale(1.08);
           }
         }
 
         @keyframes float3 {
-          0%,
-          100% {
-            transform: translate(0px, 0px) rotate(3deg) scale(0.9);
+          0% {
+            transform: translate(0px, 0px) rotate(3deg) scale(0.78);
           }
           50% {
             transform: translate(-14px, 8px) rotate(5deg) scale(1.05);
           }
+          100% {
+            transform: translate(6px, -4px) rotate(4deg) scale(0.9);
+          }
         }
 
         @keyframes float4 {
-          0%,
-          100% {
+          0% {
             transform: translate(0px, 0px) rotate(-3deg) scale(1);
           }
           50% {
-            transform: translate(12px, 10px) rotate(-5deg) scale(1.15);
+            transform: translate(12px, 10px) rotate(-5deg) scale(1.25);
+          }
+          100% {
+            transform: translate(-6px, -6px) rotate(-4deg) scale(1.1);
           }
         }
 
