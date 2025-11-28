@@ -422,7 +422,7 @@ export default function Page() {
 
       const nft = new ethers.Contract(nftAddress, NFT_CONTRACT_ABI, provider);
 
-      const MAX_IDS_PER_SLOT = 200;
+      const MAX_IDS_PER_SLOT = 500;
 
       if (activePortal === "tickets") {
         const newOptions: number[][] = [[], [], [], []];
