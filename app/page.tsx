@@ -1475,6 +1475,7 @@ export default function Page() {
           }
         }
 
+        /* Make 0% and 100% the same so the loop is seamless (no pop) */
         @keyframes float1 {
           0% {
             transform: translate(0px, 0px) rotate(-2deg) scale(1);
@@ -1483,7 +1484,7 @@ export default function Page() {
             transform: translate(10px, -6px) rotate(-4deg) scale(1.25);
           }
           100% {
-            transform: translate(-4px, 4px) rotate(-3deg) scale(1.12);
+            transform: translate(0px, 0px) rotate(-2deg) scale(1);
           }
         }
 
@@ -1495,31 +1496,31 @@ export default function Page() {
             transform: translate(-12px, -10px) rotate(4deg) scale(1.25);
           }
           100% {
-            transform: translate(8px, 6px) rotate(3deg) scale(1.08);
+            transform: translate(0px, 0px) rotate(2deg) scale(1.05);
           }
         }
 
         @keyframes float3 {
           0% {
-            transform: translate(0px, 0px) rotate(3deg) scale(0.78);
+            transform: translate(0px, 0px) rotate(3deg) scale(0.9);
           }
           50% {
             transform: translate(-14px, 8px) rotate(5deg) scale(1.05);
           }
           100% {
-            transform: translate(6px, -4px) rotate(4deg) scale(0.9);
+            transform: translate(0px, 0px) rotate(3deg) scale(0.9);
           }
         }
 
         @keyframes float4 {
           0% {
-            transform: translate(0px, 0px) rotate(-3deg) scale(1);
+            transform: translate(0px, 0px) rotate(-3deg) scale(1.05);
           }
           50% {
             transform: translate(12px, 10px) rotate(-5deg) scale(1.25);
           }
           100% {
-            transform: translate(-6px, -6px) rotate(-4deg) scale(1.1);
+            transform: translate(0px, 0px) rotate(-3deg) scale(1.05);
           }
         }
 
