@@ -22,6 +22,23 @@ const TICKETS_MARKET_URL =
 const TBAGGIEZ_MARKET_URL =
   "https://element.market/collections/t-baggiez?search[toggles][0]=ALL";
 
+// ====== FAST RPC READ SETTINGS (speed-up scanning) ======
+const LINEA_RPC_URL = "https://rpc.linea.build";
+const OWNER_OF_CONCURRENCY = 25; // bump to 40 if you want, but 25 is safer
+
+async function chunkedAllSettled<T>(
+  tasks: Array<() => Promise<T>>,
+  chunkSize: number
+) {
+  const results: PromiseSettledResult<T>[] = [];
+  for (let i = 0; i < tasks.length; i += chunkSize) {
+    const chunk = tasks.slice(i, i + chunkSize).map((fn) => fn());
+    const settled = await Promise.allSettled(chunk);
+    results.push(...settled);
+  }
+  return results;
+}
+
 // ====== ABIs ======
 const SWAP_CONTRACT_ABI = [
   "function swapTicketsForTBaggiez(uint256[4] ids) external",
@@ -390,7 +407,7 @@ export default function Page() {
   };
 
   // ============================================================
-  // SCAN WALLET FOR ELIGIBLE IDS
+  // SCAN WALLET FOR ELIGIBLE IDS (FAST: public RPC + concurrency + parallel slots)
   // ============================================================
 
   const scanEligibleForActivePortal = async () => {
@@ -398,10 +415,6 @@ export default function Page() {
       setErrorMessage(null);
       setSuccessMessage(null);
 
-      if (typeof window === "undefined" || !window.ethereum) {
-        setErrorMessage("MetaMask not found.");
-        return;
-      }
       if (!walletAddress) {
         setErrorMessage("Connect your wallet first.");
         return;
@@ -413,74 +426,79 @@ export default function Page() {
 
       setIsScanning(true);
 
-      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      // Use FAST public RPC for reads (avoid MetaMask provider bottlenecks)
+      const readProvider = new ethers.providers.JsonRpcProvider(LINEA_RPC_URL);
 
       const nftAddress =
         activePortal === "tickets"
           ? TICKETS_NFT_CONTRACT_ADDRESS
           : TBAGGIEZ_NFT_CONTRACT_ADDRESS;
 
-      const nft = new ethers.Contract(nftAddress, NFT_CONTRACT_ABI, provider);
+      const nft = new ethers.Contract(nftAddress, NFT_CONTRACT_ABI, readProvider);
 
+      // Keep your cap; adjust later if needed
       const MAX_IDS_PER_SLOT = 500;
+
+      const ownerLower = walletAddress.toLowerCase();
+
+      const scanSlot = async (min: number, max: number) => {
+        const limit = Math.min(max, min + MAX_IDS_PER_SLOT - 1);
+        const tasks: Array<() => Promise<number | null>> = [];
+
+        for (let id = min; id <= limit; id++) {
+          tasks.push(async () => {
+            try {
+              const o: string = await nft.ownerOf(id);
+              return o.toLowerCase() === ownerLower ? id : null;
+            } catch {
+              return null; // non-existent / reverted ownerOf
+            }
+          });
+        }
+
+        const settled = await chunkedAllSettled(tasks, OWNER_OF_CONCURRENCY);
+
+        const ownedIds: number[] = [];
+        for (const r of settled) {
+          if (r.status === "fulfilled" && r.value !== null) ownedIds.push(r.value);
+        }
+
+        return ownedIds;
+      };
 
       if (activePortal === "tickets") {
         const newOptions: number[][] = [[], [], [], []];
 
-        for (let i = 0; i < 4; i++) {
-          const r = ticketsRanges[i];
-          if (!r) continue;
+        await Promise.all(
+          [0, 1, 2, 3].map(async (i) => {
+            const r = ticketsRanges[i];
+            if (!r) return;
 
-          const min = parseInt(r.minId || "0", 10);
-          const max = parseInt(r.maxId || "0", 10);
-          if (isNaN(min) || isNaN(max) || min > max) continue;
+            const min = parseInt(r.minId || "0", 10);
+            const max = parseInt(r.maxId || "0", 10);
+            if (isNaN(min) || isNaN(max) || min > max) return;
 
-          const limit = Math.min(max, min + MAX_IDS_PER_SLOT - 1);
-          const ownedIds: number[] = [];
-
-          for (let id = min; id <= limit; id++) {
-            try {
-              const owner: string = await nft.ownerOf(id);
-              if (owner.toLowerCase() === walletAddress.toLowerCase()) {
-                ownedIds.push(id);
-              }
-            } catch {
-              // ignore non-existent IDs
-            }
-          }
-
-          newOptions[i] = ownedIds;
-        }
+            newOptions[i] = await scanSlot(min, max);
+          })
+        );
 
         setTicketSlotOptions(newOptions);
         setHasScannedTickets(true);
       } else {
         const newOptions: number[][] = [[], [], []];
 
-        for (let i = 0; i < 3; i++) {
-          const r = tbagRanges[i];
-          if (!r) continue;
+        await Promise.all(
+          [0, 1, 2].map(async (i) => {
+            const r = tbagRanges[i];
+            if (!r) return;
 
-          const min = parseInt(r.minId || "0", 10);
-          const max = parseInt(r.maxId || "0", 10);
-          if (isNaN(min) || isNaN(max) || min > max) continue;
+            const min = parseInt(r.minId || "0", 10);
+            const max = parseInt(r.maxId || "0", 10);
+            if (isNaN(min) || isNaN(max) || min > max) return;
 
-          const limit = Math.min(max, min + MAX_IDS_PER_SLOT - 1);
-          const ownedIds: number[] = [];
-
-          for (let id = min; id <= limit; id++) {
-            try {
-              const owner: string = await nft.ownerOf(id);
-              if (owner.toLowerCase() === walletAddress.toLowerCase()) {
-                ownedIds.push(id);
-              }
-            } catch {
-              // ignore
-            }
-          }
-
-          newOptions[i] = ownedIds;
-        }
+            newOptions[i] = await scanSlot(min, max);
+          })
+        );
 
         setTbagSlotOptions(newOptions);
         setHasScannedTBaggiez(true);
@@ -517,9 +535,7 @@ export default function Page() {
         return;
       }
       if (!currentHasApproval) {
-        setErrorMessage(
-          "You must approve the swap contract to move your NFTs."
-        );
+        setErrorMessage("You must approve the swap contract to move your NFTs.");
         return;
       }
       if (!isPohVerified) {
@@ -901,10 +917,9 @@ export default function Page() {
             <div className="status-right">
               <span className="status-address">
                 {walletAddress
-                  ? `Connected: ${walletAddress.slice(
-                      0,
-                      6
-                    )}...${walletAddress.slice(-4)}`
+                  ? `Connected: ${walletAddress.slice(0, 6)}...${walletAddress.slice(
+                      -4
+                    )}`
                   : "Not connected"}
               </span>
               {walletAddress && (
@@ -1025,12 +1040,7 @@ export default function Page() {
                           {ticketsRanges[i].maxId}
                         </span>
                       )}
-                      {tokenChips(
-                        i,
-                        ticketSlotOptions,
-                        ticketIds,
-                        setTicketIds
-                      )}
+                      {tokenChips(i, ticketSlotOptions, ticketIds, setTicketIds)}
                     </div>
                   ))}
                 </div>
@@ -1051,12 +1061,7 @@ export default function Page() {
                           {tbagRanges[i].maxId}
                         </span>
                       )}
-                      {tokenChips(
-                        i,
-                        tbagSlotOptions,
-                        tbagIds,
-                        setTbagIds
-                      )}
+                      {tokenChips(i, tbagSlotOptions, tbagIds, setTbagIds)}
                     </div>
                   ))}
                 </div>
@@ -1475,7 +1480,7 @@ export default function Page() {
           }
         }
 
-        /* Make 0% and 100% the same so the loop is seamless (no pop) */
+        /* Seamless loop animations (no pop) */
         @keyframes float1 {
           0% {
             transform: translate(0px, 0px) rotate(-2deg) scale(1);
